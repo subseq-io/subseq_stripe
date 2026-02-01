@@ -14,6 +14,7 @@ use stripe::{
     Event, EventObject, EventType, Expandable, SubscriptionId, SubscriptionSchedule,
 };
 use tokio::sync::{Mutex, OnceCell, RwLock};
+use url::Url;
 use uuid::Uuid;
 
 use crate::cache::CacheEntry;
@@ -546,8 +547,7 @@ where
 
 pub async fn create_checkout_cart<F, Fut, G, GFut>(
     internal_id: Uuid,
-    base_url: &str,
-    stripe_return_uri: &str,
+    stripe_return_url: &Url,
     plan: &PricingPlan,
     quantity: u64,
     get_customer_id: F,
@@ -604,10 +604,7 @@ where
         quantity: Some(quantity),
         ..Default::default()
     }]);
-    let return_url = format!(
-        "{}{}?session_id={{CHECKOUT_SESSION_ID}}",
-        base_url, stripe_return_uri
-    );
+    let return_url = format!("{}?session_id={{CHECKOUT_SESSION_ID}}", stripe_return_url);
     params.return_url = Some(&return_url);
     let stripe_session = stripe::CheckoutSession::create(&client, params)
         .await

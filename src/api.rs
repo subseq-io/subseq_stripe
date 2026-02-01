@@ -11,6 +11,7 @@ use axum::{
 use axum_auth_user::prelude::{AuthenticatedUser, ValidatesIdentity};
 use serde::Deserialize;
 use stripe::Webhook;
+use url::Url;
 
 use crate::db;
 use crate::error::{ErrorKind, LibError};
@@ -41,15 +42,11 @@ impl From<LibError> for AppError {
     }
 }
 
-pub trait HasBaseUrl {
-    fn base_url(&self) -> String;
-}
-
 pub trait HasPool {
     fn pool(&self) -> Arc<sqlx::PgPool>;
 }
 
-pub trait StripeApp: HasBaseUrl + HasPool + ValidatesIdentity {}
+pub trait StripeApp: HasPool + ValidatesIdentity {}
 
 async fn get_product_handler<S>(
     State(app): State<S>,
@@ -86,7 +83,7 @@ where
 pub struct SelectedPlan {
     pub key: String,
     pub quantity: u64,
-    pub status_uri: String,
+    pub status_url: Url,
 }
 
 async fn stripe_checkout_cart_handler<S>(
@@ -98,17 +95,15 @@ where
     S: StripeApp + Clone + Send + Sync + 'static,
 {
     let internal_id = auth_user.id().0;
-    let base_url = app.base_url();
     let SelectedPlan {
         key,
         quantity,
-        status_uri,
+        status_url,
     } = params;
     let session = db::create_checkout_cart(
         app.pool(),
         internal_id,
-        &base_url,
-        &status_uri,
+        &status_url,
         &key,
         quantity,
     )

@@ -5,6 +5,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::{FromRow, PgPool};
+use url::Url;
 use uuid::Uuid;
 
 use crate::error::{LibError, Result};
@@ -318,8 +319,7 @@ impl CheckoutSessionRow {
 pub async fn create_checkout_cart(
     pool: Arc<PgPool>,
     internal_id: Uuid,
-    base_url: &str,
-    stripe_return_uri: &str,
+    stripe_return_url: &Url,
     key: &str,
     quantity: u64,
 ) -> Result<String> {
@@ -356,8 +356,7 @@ pub async fn create_checkout_cart(
 
     models::create_checkout_cart(
         internal_id,
-        base_url,
-        stripe_return_uri,
+        stripe_return_url,
         &plan,
         quantity,
         get_customer_id,
