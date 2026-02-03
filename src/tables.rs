@@ -95,6 +95,7 @@ impl CheckoutSession {
 }
 
 #[derive(PartialEq, Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubscriptionState {
     pub internal_id: Uuid,
     pub created: NaiveDateTime,
