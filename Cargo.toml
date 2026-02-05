@@ -1,5 +1,5 @@
 [package]
-name = "axum_stripe"
+name = "subseq_stripe"
 version = "0.1.0"
 edition = "2024"
 
