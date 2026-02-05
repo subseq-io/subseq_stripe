@@ -173,7 +173,7 @@ pub fn routes<S>() -> Router<S>
 where
     S: StripeApp + Clone + Send + Sync + 'static,
 {
-    Router::new()
+    let mut router = Router::new()
         .route(
             "/stripe/product/{product_id}",
             get(get_product_handler::<S>),
@@ -184,10 +184,17 @@ where
             get(stripe_checkout_status_handler::<S>),
         )
         .route("/stripe/checkout", get(stripe_checkout_cart_handler::<S>))
-        .route("/stripe/webhook", post(stripe_webhook_handler::<S>))
         .route(
             "/stripe/subscription",
             get(stripe_get_subscription_handler::<S>)
                 .delete(stripe_deactivate_subscription_handler::<S>),
-        )
+        );
+
+    if std::env::var("STRIPE_WEBHOOK_SECRET").is_ok() {
+        router = router.route("/stripe/webhook", post(stripe_webhook_handler::<S>));
+    } else {
+        tracing::warn!("STRIPE_WEBHOOK_SECRET not set; stripe webhook route disabled");
+    }
+
+    router
 }

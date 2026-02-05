@@ -5,7 +5,7 @@
 //! webhook delivery.
 
 use anyhow::anyhow;
-use stripe::{Event, EventObject, EventType};
+use stripe::{Event, EventObject, EventType, Expandable};
 use uuid::Uuid;
 
 use crate::api::HasPool;
@@ -351,9 +351,14 @@ pub trait HandlesStripeEvents: HasPool {
             EventObject::SubscriptionSchedule(sub) => sub,
             _ => return self.on_unhandled_event(event),
         };
+        let subscription_id = match schedule.subscription {
+            Some(Expandable::Id(id)) => id,
+            Some(Expandable::Object(sub)) => sub.id.clone(),
+            None => return self.on_unhandled_event(event),
+        };
         let pool = self.pool();
         Box::pin(async move {
-            let sub_id = schedule.id.as_str().to_owned();
+            let sub_id = subscription_id.as_str().to_owned();
             db::SubscriptionRow::inactivate_by_sub_id(&pool, &sub_id, true)
                 .await
                 .map_err(|e| {
@@ -372,9 +377,14 @@ pub trait HandlesStripeEvents: HasPool {
             EventObject::SubscriptionSchedule(sub) => sub,
             _ => return self.on_unhandled_event(event),
         };
+        let subscription_id = match schedule.subscription {
+            Some(Expandable::Id(id)) => id,
+            Some(Expandable::Object(sub)) => sub.id.clone(),
+            None => return self.on_unhandled_event(event),
+        };
         let pool = self.pool();
         Box::pin(async move {
-            let sub_id = schedule.id.as_str().to_owned();
+            let sub_id = subscription_id.as_str().to_owned();
             db::SubscriptionRow::inactivate_by_sub_id(&pool, &sub_id, true)
                 .await
                 .map_err(|e| {
