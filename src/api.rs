@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use axum_auth_user::prelude::{AuthenticatedUser, ValidatesIdentity};
+use subseq_auth::prelude::{AuthenticatedUser, ValidatesIdentity};
 use serde::Deserialize;
 use stripe::Webhook;
 use url::Url;
