@@ -16,6 +16,7 @@ use url::Url;
 use crate::db;
 use crate::error::{ErrorKind, LibError};
 use crate::models::FinalizeCheckout;
+use crate::stripe_events::HandlesStripeEvents;
 
 #[derive(Debug)]
 pub struct AppError(pub LibError);
@@ -46,7 +47,7 @@ pub trait HasPool {
     fn pool(&self) -> Arc<sqlx::PgPool>;
 }
 
-pub trait StripeApp: HasPool + ValidatesIdentity {}
+pub trait StripeApp: HasPool + ValidatesIdentity + HandlesStripeEvents {}
 
 async fn get_product_handler<S>(
     State(app): State<S>,
@@ -140,8 +141,7 @@ where
 
     let event = Webhook::construct_event(&body_str, sig, &webhook_secret)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    db::handle_stripe_event(app.pool(), event)
-        .await
+    app.handle_stripe_event(event).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::OK)

@@ -18,7 +18,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::cache::CacheEntry;
-use crate::error::{LibError, Result};
+use crate::error::{ErrorKind, LibError, Result};
 use crate::tables::{
     BillingLink, CheckoutSession, PricingPlan, SubscriptionState, SubscriptionStateUpdate,
     SubscriptionType,
@@ -814,19 +814,28 @@ where
                 EventObject::SubscriptionSchedule(sub) => sub,
                 _ => return Ok(()),
             };
-            let internal_id = get_billing_link(sub.customer.id().as_str().to_owned())
-                .await
-                .ok_or_else(|| {
-                    tracing::error!(
-                        "Error fetching billing link for subscription {}",
+            let internal_id = match get_billing_link(sub.customer.id().as_str().to_owned()).await {
+                Some(id) => id,
+                None => {
+                    tracing::warn!(
+                        "Stripe webhook: no billing link found for customer {}",
                         sub.customer.id()
                     );
-                    LibError::upstream(
-                        "Error fetching billing link",
-                        anyhow!("handle_stripe_event error fetching billing link"),
-                    )
-                })?;
-            deactivate_subscription(internal_id, get_subscription, cancel_subscription).await?;
+                    return Ok(());
+                }
+            };
+            if let Err(err) =
+                deactivate_subscription(internal_id, get_subscription, cancel_subscription).await
+            {
+                if matches!(err.kind, ErrorKind::NotFound) {
+                    tracing::warn!(
+                        "Stripe webhook: subscription not found for internal id {}",
+                        internal_id
+                    );
+                    return Ok(());
+                }
+                return Err(err);
+            }
         }
         EventType::SubscriptionScheduleCreated => {
             let sub = match event.data.object {
