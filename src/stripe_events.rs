@@ -354,7 +354,7 @@ pub trait HandlesStripeEvents: HasPool {
         let subscription_id = match schedule.subscription {
             Some(Expandable::Id(id)) => id,
             Some(Expandable::Object(sub)) => sub.id.clone(),
-            None => return self.on_unhandled_event(event),
+            None => return Box::pin(async { Ok(()) }),
         };
         let pool = self.pool();
         Box::pin(async move {
@@ -380,7 +380,7 @@ pub trait HandlesStripeEvents: HasPool {
         let subscription_id = match schedule.subscription {
             Some(Expandable::Id(id)) => id,
             Some(Expandable::Object(sub)) => sub.id.clone(),
-            None => return self.on_unhandled_event(event),
+            None => return Box::pin(async { Ok(()) }),
         };
         let pool = self.pool();
         Box::pin(async move {

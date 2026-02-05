@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::migrate::{MigrateError, Migrator};
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
 use url::Url;
 use uuid::Uuid;
 
@@ -746,42 +746,56 @@ impl SubscriptionRow {
         internal_id: Uuid,
         update: SubscriptionStateUpdate,
     ) -> Result<(), sqlx::Error> {
-        let SubscriptionStateUpdate {
-            subscription_id,
-            subscription_type,
-            cancel_at_period_end,
-            current_period_end,
-            is_auto_billing,
-            seats,
-        } = update;
-        let mut query = format!("UPDATE {} SET ", Self::table_name());
-
-        let mut sets = vec![];
-
-        if let Some(sub_id) = subscription_id {
-            sets.push(format!("subscription_id = '{}'", sub_id));
-        }
-        sets.push(format!(
-            "subscription_type = '{}'",
-            serde_json::to_string(&subscription_type).unwrap()
-        ));
-        sets.push(format!("cancel_at_period_end = {}", cancel_at_period_end));
-        if let Some(period_end) = current_period_end {
-            sets.push(format!("current_period_timestamp = '{}'", period_end));
-        }
-        sets.push(format!("is_auto_billing = {}", is_auto_billing));
-        if let Some(seat_count) = seats {
-            sets.push(format!("seats = {}", seat_count));
-        }
-        sets.push(format!("updated = '{}'", chrono::Utc::now().naive_utc()));
-
-        query.push_str(&sets.join(", "));
-        query.push_str(" WHERE internal_id = $1");
-
-        sqlx::query(&query).bind(internal_id).execute(pool).await?;
+        let mut query = build_update_by_internal_id_query(internal_id, update)?;
+        query.build().execute(pool).await?;
 
         Ok(())
     }
+}
+
+fn build_update_by_internal_id_query(
+    internal_id: Uuid,
+    update: SubscriptionStateUpdate,
+) -> Result<QueryBuilder<'static, Postgres>, sqlx::Error> {
+    let SubscriptionStateUpdate {
+        subscription_id,
+        subscription_type,
+        cancel_at_period_end,
+        current_period_end,
+        is_auto_billing,
+        seats,
+    } = update;
+    let mut query = QueryBuilder::new(format!("UPDATE {} SET ", SubscriptionRow::table_name()));
+    let mut separated = query.separated(", ");
+
+    if let Some(sub_id) = subscription_id {
+        separated.push("subscription_id = ").push_bind(sub_id);
+    }
+    separated
+        .push("subscription_type = ")
+        .push_bind(serde_json::to_string(&subscription_type).unwrap());
+    separated
+        .push("cancel_at_period_end = ")
+        .push_bind(cancel_at_period_end);
+    if let Some(period_end) = current_period_end {
+        separated
+            .push("current_period_timestamp = ")
+            .push_bind(period_end);
+    }
+    separated
+        .push("is_auto_billing = ")
+        .push_bind(is_auto_billing);
+    if let Some(seat_count) = seats {
+        let seat_count = i32::try_from(seat_count)
+            .map_err(|_| sqlx::Error::InvalidArgument("seats exceeds i32 range".to_string()))?;
+        separated.push("seats = ").push_bind(seat_count);
+    }
+    separated
+        .push("updated = ")
+        .push_bind(chrono::Utc::now().naive_utc());
+
+    query.push(" WHERE internal_id = ").push_bind(internal_id);
+    Ok(query)
 }
 
 fn sub_row_to_state(row: SubscriptionRow) -> Result<SubscriptionState> {
@@ -927,4 +941,37 @@ pub async fn handle_stripe_event(pool: Arc<PgPool>, event: stripe::Event) -> Res
         update_subscription,
     )
     .await
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use sqlx::Execute;
+
+    #[test]
+    fn update_by_internal_id_is_parameterized() {
+        let internal_id = Uuid::new_v4();
+        let update = SubscriptionStateUpdate {
+            subscription_id: Some("sub_\"injected'".to_string()),
+            subscription_type: SubscriptionType::Paid,
+            cancel_at_period_end: true,
+            current_period_end: None,
+            is_auto_billing: false,
+            seats: Some(7),
+        };
+
+        let mut query =
+            build_update_by_internal_id_query(internal_id, update).expect("build query");
+        let sql = query.build().sql().to_string();
+
+        assert!(sql.contains("subscription_id"));
+        assert!(sql.contains("subscription_type"));
+        assert!(sql.contains("cancel_at_period_end"));
+        assert!(sql.contains("is_auto_billing"));
+        assert!(sql.contains("seats"));
+        assert!(sql.contains("updated"));
+        assert!(sql.contains("WHERE internal_id"));
+        assert!(sql.contains('$'));
+        assert!(!sql.contains("sub_\\\"injected'"));
+    }
 }
