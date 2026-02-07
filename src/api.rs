@@ -173,6 +173,11 @@ pub fn routes<S>() -> Router<S>
 where
     S: StripeApp + Clone + Send + Sync + 'static,
 {
+    tracing::info!("Registering route /stripe/product/{{product_id}} [GET]");
+    tracing::info!("Registering route /stripe/products [GET]");
+    tracing::info!("Registering route /stripe/checkout/status [GET]");
+    tracing::info!("Registering route /stripe/checkout [GET]");
+    tracing::info!("Registering route /stripe/subscription [GET,DELETE]");
     let mut router = Router::new()
         .route(
             "/stripe/product/{product_id}",
@@ -191,6 +196,7 @@ where
         );
 
     if std::env::var("STRIPE_WEBHOOK_SECRET").is_ok() {
+        tracing::info!("Registering route /stripe/webhook [POST]");
         router = router.route("/stripe/webhook", post(stripe_webhook_handler::<S>));
     } else {
         tracing::warn!("STRIPE_WEBHOOK_SECRET not set; stripe webhook route disabled");
