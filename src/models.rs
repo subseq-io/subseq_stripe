@@ -61,6 +61,7 @@ pub struct ApiProduct {
     key: String,
     name: String,
     description: String,
+    features: Vec<String>,
     currency: stripe::Currency,
     subscription: SubscriptionPeriod,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -153,6 +154,21 @@ fn v_str<'a>(v: &'a Value, path: &[&str]) -> Option<&'a str> {
 
 fn v_u64(v: &Value, path: &[&str]) -> Option<u64> {
     v_get(v, path).and_then(|x| x.as_u64())
+}
+
+fn product_feature_list(product: Option<&stripe::Product>) -> Vec<String> {
+    product
+        .and_then(|p| p.features.as_ref())
+        .map(|features| {
+            features
+                .iter()
+                .filter_map(|feature| feature.name.as_ref())
+                .map(|name| name.trim())
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn classify_pricing(price: &stripe::Price) -> Result<ApiPricing> {
@@ -373,12 +389,14 @@ where
         .as_ref()
         .and_then(|p| p.description.clone())
         .unwrap_or_default();
+    let features: Vec<String> = product_feature_list(product.as_ref());
     let credits: Option<i32> = credits_from_price(&client, &price).await;
     let pricing: ApiPricing = classify_pricing(&price)?;
     let fresh = ApiProduct {
         key: plan.key,
         name,
         description,
+        features,
         currency,
         subscription,
         credits,
