@@ -788,39 +788,44 @@ fn build_update_by_internal_id_query(
     let mut separated = query.separated(", ");
 
     if let Some(sub_id) = subscription_id {
-        separated.push("subscription_id = ").push_bind(sub_id);
+        separated
+            .push("subscription_id = ")
+            .push_bind_unseparated(sub_id);
     }
     if let Some(price_id) = price_id {
-        separated.push("price_id = ").push_bind(price_id);
+        separated
+            .push("price_id = ")
+            .push_bind_unseparated(price_id);
     }
     separated
         .push("subscription_type = ")
-        .push_bind(serde_json::to_string(&subscription_type).unwrap());
+        .push_bind_unseparated(serde_json::to_string(&subscription_type).unwrap());
     separated
         .push("cancel_at_period_end = ")
-        .push_bind(cancel_at_period_end);
+        .push_bind_unseparated(cancel_at_period_end);
     if let Some(period_start) = current_period_start {
         separated
             .push("current_period_start = ")
-            .push_bind(period_start);
+            .push_bind_unseparated(period_start);
     }
     if let Some(period_end) = current_period_end {
         separated
             .push("current_period_timestamp = ")
-            .push_bind(period_end);
+            .push_bind_unseparated(period_end);
     }
     separated
         .push("is_auto_billing = ")
-        .push_bind(is_auto_billing);
+        .push_bind_unseparated(is_auto_billing);
     if let Some(seat_count) = seats {
         let seat_count = i32::try_from(seat_count)
             .map_err(|_| sqlx::Error::InvalidArgument("seats exceeds i32 range".to_string()))?;
-        separated.push("seats = ").push_bind(seat_count);
+        separated.push("seats = ").push_bind_unseparated(seat_count);
     }
     separated
         .push("updated = ")
-        .push_bind(chrono::Utc::now().naive_utc());
+        .push_bind_unseparated(chrono::Utc::now().naive_utc());
 
+    drop(separated);
     query.push(" WHERE internal_id = ").push_bind(internal_id);
     Ok(query)
 }
@@ -994,7 +999,6 @@ mod test {
         let mut query =
             build_update_by_internal_id_query(internal_id, update).expect("build query");
         let sql = query.build().sql().to_string();
-
         assert!(sql.contains("subscription_id"));
         assert!(sql.contains("price_id"));
         assert!(sql.contains("subscription_type"));
@@ -1004,6 +1008,8 @@ mod test {
         assert!(sql.contains("updated"));
         assert!(sql.contains("WHERE internal_id"));
         assert!(sql.contains('$'));
+        assert!(!sql.contains(",  WHERE"));
+        assert!(!sql.contains("= ,"));
         assert!(!sql.contains("sub_\\\"injected'"));
     }
 }
