@@ -8,9 +8,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use subseq_auth::prelude::{AuthenticatedUser, ValidatesIdentity};
 use serde::Deserialize;
 use stripe::Webhook;
+use subseq_auth::prelude::{AuthenticatedUser, ValidatesIdentity};
 use url::Url;
 
 use crate::db;
@@ -101,14 +101,8 @@ where
         quantity,
         status_url,
     } = params;
-    let session = db::create_checkout_cart(
-        app.pool(),
-        internal_id,
-        &status_url,
-        &key,
-        quantity,
-    )
-    .await?;
+    let session =
+        db::create_checkout_cart(app.pool(), internal_id, &status_url, &key, quantity).await?;
     Ok(Json(serde_json::json!({"clientSecret": session})))
 }
 
@@ -141,7 +135,8 @@ where
 
     let event = Webhook::construct_event(&body_str, sig, &webhook_secret)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    app.handle_stripe_event(event).await
+    app.handle_stripe_event(event)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(StatusCode::OK)

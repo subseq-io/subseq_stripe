@@ -9,6 +9,9 @@ pub mod cache;
 #[cfg(feature = "sqlx")]
 pub mod db;
 
+#[cfg(feature = "sqlx")]
+pub mod usage_pricing;
+
 pub mod error;
 pub mod models;
 pub mod prelude;

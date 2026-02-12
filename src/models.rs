@@ -617,9 +617,13 @@ where
         Some(_) => stripe::CheckoutSessionMode::Subscription,
         None => stripe::CheckoutSessionMode::Payment,
     });
+    let line_item_quantity = match price.recurring.as_ref().map(|r| r.usage_type) {
+        Some(stripe::RecurringUsageType::Metered) => None,
+        _ => Some(quantity),
+    };
     params.line_items = Some(vec![stripe::CreateCheckoutSessionLineItems {
         price: Some(plan.price_id.clone()),
-        quantity: Some(quantity),
+        quantity: line_item_quantity,
         ..Default::default()
     }]);
     let return_url = format!("{}?session_id={{CHECKOUT_SESSION_ID}}", stripe_return_url);
@@ -650,8 +654,12 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionInfo {
     pub plan: SubscriptionType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_id: Option<String>,
     pub seats: Option<i32>,
     pub is_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_period_start: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_period_end: Option<DateTime<Utc>>,
     pub auto_renew: bool,
@@ -669,8 +677,10 @@ where
 
     Ok(SubscriptionInfo {
         plan: plan.subscription_type,
+        price_id: plan.price_id,
         seats: plan.seats,
         is_active: plan.is_active,
+        current_period_start: plan.current_period_start.map(|d| d.and_utc()),
         current_period_end: plan.current_period_end.map(|d| d.and_utc()),
         auto_renew: plan.is_auto_billing,
     })
@@ -740,6 +750,25 @@ pub fn seats_from_subscription_first_licensed(sub: &stripe::Subscription) -> Opt
         .map(|q| q.max(1) as u64)
 }
 
+pub fn price_id_from_subscription(sub: &stripe::Subscription) -> Option<String> {
+    // Prefer metered lines when present so usage-tier resolution tracks the billing gate.
+    let metered = sub.items.data.iter().find(|it| {
+        it.price
+            .as_ref()
+            .and_then(|p| p.recurring.as_ref())
+            .map(|r| r.usage_type)
+            == Some(stripe::RecurringUsageType::Metered)
+    });
+
+    let metered_price_id = metered.and_then(|it| it.price.as_ref().map(|p| p.id.to_string()));
+    let any_price_id = sub
+        .items
+        .data
+        .iter()
+        .find_map(|it| it.price.as_ref().map(|p| p.id.to_string()));
+    metered_price_id.or(any_price_id)
+}
+
 pub async fn subscription_updated<F, Fut, G, GFut>(
     schedule: SubscriptionSchedule,
     get_billing_link: F,
@@ -786,8 +815,12 @@ where
     // 5) Build a compact state update payload for your DB
     let update = SubscriptionStateUpdate {
         subscription_id: Some(sub.id.to_string()),
+        price_id: price_id_from_subscription(&sub),
         subscription_type: SubscriptionType::Paid,
         cancel_at_period_end: sub.cancel_at_period_end,
+        current_period_start: Some(
+            unix_seconds_to_systemtime(sub.current_period_start).naive_utc(),
+        ),
         current_period_end: Some(unix_seconds_to_systemtime(sub.current_period_end).naive_utc()),
         is_auto_billing: !sub.cancel_at_period_end,
         seats,

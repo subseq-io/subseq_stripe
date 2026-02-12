@@ -406,6 +406,9 @@ pub async fn checkout_status(
                                                    sub: stripe::Subscription|
            -> Result<()> {
         let now = chrono::Utc::now().naive_utc();
+        let current_period_start =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(sub.current_period_start, 0)
+                .map(|dt| dt.naive_utc());
         let current_period =
             chrono::DateTime::<chrono::Utc>::from_timestamp(sub.current_period_end, 0)
                 .map(|dt| dt.naive_utc());
@@ -414,9 +417,11 @@ pub async fn checkout_status(
             created: now,
             updated: now,
             subscription_id: Some(sub.id.to_string()),
+            price_id: models::price_id_from_subscription(&sub),
             subscription_type: serde_json::to_string(&SubscriptionType::Paid).expect("serialize"),
             seats: 1,
             is_active: sub.status == stripe::SubscriptionStatus::Active,
+            current_period_start,
             current_period_timestamp: current_period,
             cancel_at_period_end: sub.cancel_at_period_end,
             last_payment_failed: false,
@@ -571,9 +576,11 @@ pub struct SubscriptionRow {
     pub created: chrono::NaiveDateTime,
     pub updated: chrono::NaiveDateTime,
     pub subscription_id: Option<String>,
+    pub price_id: Option<String>,
     pub subscription_type: String,
     pub seats: i32,
     pub is_active: bool,
+    pub current_period_start: Option<chrono::NaiveDateTime>,
     pub current_period_timestamp: Option<chrono::NaiveDateTime>,
     pub cancel_at_period_end: bool,
     pub last_payment_failed: bool,
@@ -589,9 +596,11 @@ impl SubscriptionRow {
             created: now,
             updated: now,
             subscription_id: None,
+            price_id: None,
             subscription_type: subscription_type.to_string(),
             seats,
             is_active: true,
+            current_period_start: None,
             current_period_timestamp: None,
             cancel_at_period_end: false,
             last_payment_failed: false,
@@ -606,14 +615,16 @@ impl SubscriptionRow {
     pub async fn insert(pool: &PgPool, row: &SubscriptionRow) -> Result<(), sqlx::Error> {
         sqlx::query(&format!(
             r#"
-            INSERT INTO {} (internal_id, created, updated, subscription_id, subscription_type, seats, is_active, current_period_timestamp, cancel_at_period_end, last_payment_failed, is_auto_billing)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            INSERT INTO {} (internal_id, created, updated, subscription_id, price_id, subscription_type, seats, is_active, current_period_start, current_period_timestamp, cancel_at_period_end, last_payment_failed, is_auto_billing)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             ON CONFLICT (internal_id) DO UPDATE SET
                 updated = EXCLUDED.updated,
                 subscription_id = EXCLUDED.subscription_id,
+                price_id = EXCLUDED.price_id,
                 subscription_type = EXCLUDED.subscription_type,
                 seats = EXCLUDED.seats,
                 is_active = EXCLUDED.is_active,
+                current_period_start = EXCLUDED.current_period_start,
                 current_period_timestamp = EXCLUDED.current_period_timestamp,
                 cancel_at_period_end = EXCLUDED.cancel_at_period_end,
                 last_payment_failed = EXCLUDED.last_payment_failed,
@@ -625,9 +636,11 @@ impl SubscriptionRow {
         .bind(row.created)
         .bind(row.updated)
         .bind(&row.subscription_id)
+        .bind(&row.price_id)
         .bind(&row.subscription_type)
         .bind(row.seats)
         .bind(row.is_active)
+        .bind(&row.current_period_start)
         .bind(&row.current_period_timestamp)
         .bind(row.cancel_at_period_end)
         .bind(row.last_payment_failed)
@@ -694,9 +707,11 @@ impl SubscriptionRow {
                 created,
                 updated,
                 subscription_id,
+                price_id,
                 subscription_type,
                 seats,
                 is_active,
+                current_period_start,
                 current_period_timestamp,
                 cancel_at_period_end,
                 last_payment_failed,
@@ -723,9 +738,11 @@ impl SubscriptionRow {
                 created,
                 updated,
                 subscription_id,
+                price_id,
                 subscription_type,
                 seats,
                 is_active,
+                current_period_start,
                 current_period_timestamp,
                 cancel_at_period_end,
                 last_payment_failed,
@@ -759,8 +776,10 @@ fn build_update_by_internal_id_query(
 ) -> Result<QueryBuilder<'static, Postgres>, sqlx::Error> {
     let SubscriptionStateUpdate {
         subscription_id,
+        price_id,
         subscription_type,
         cancel_at_period_end,
+        current_period_start,
         current_period_end,
         is_auto_billing,
         seats,
@@ -771,12 +790,20 @@ fn build_update_by_internal_id_query(
     if let Some(sub_id) = subscription_id {
         separated.push("subscription_id = ").push_bind(sub_id);
     }
+    if let Some(price_id) = price_id {
+        separated.push("price_id = ").push_bind(price_id);
+    }
     separated
         .push("subscription_type = ")
         .push_bind(serde_json::to_string(&subscription_type).unwrap());
     separated
         .push("cancel_at_period_end = ")
         .push_bind(cancel_at_period_end);
+    if let Some(period_start) = current_period_start {
+        separated
+            .push("current_period_start = ")
+            .push_bind(period_start);
+    }
     if let Some(period_end) = current_period_end {
         separated
             .push("current_period_timestamp = ")
@@ -804,6 +831,7 @@ fn sub_row_to_state(row: SubscriptionRow) -> Result<SubscriptionState> {
         created: row.created,
         updated: row.updated,
         subscription_id: row.subscription_id,
+        price_id: row.price_id,
         subscription_type: serde_json::from_str(&row.subscription_type).map_err(|e| {
             LibError::database(
                 "Failed to parse subscription type",
@@ -812,6 +840,7 @@ fn sub_row_to_state(row: SubscriptionRow) -> Result<SubscriptionState> {
         })?,
         seats: Some(row.seats as i32),
         is_active: row.is_active,
+        current_period_start: row.current_period_start,
         current_period_end: row.current_period_timestamp,
         cancel_at_period_end: row.cancel_at_period_end,
         last_payment_failed: row.last_payment_failed,
@@ -953,8 +982,10 @@ mod test {
         let internal_id = Uuid::new_v4();
         let update = SubscriptionStateUpdate {
             subscription_id: Some("sub_\"injected'".to_string()),
+            price_id: Some("price_\"inject".to_string()),
             subscription_type: SubscriptionType::Paid,
             cancel_at_period_end: true,
+            current_period_start: None,
             current_period_end: None,
             is_auto_billing: false,
             seats: Some(7),
@@ -965,6 +996,7 @@ mod test {
         let sql = query.build().sql().to_string();
 
         assert!(sql.contains("subscription_id"));
+        assert!(sql.contains("price_id"));
         assert!(sql.contains("subscription_type"));
         assert!(sql.contains("cancel_at_period_end"));
         assert!(sql.contains("is_auto_billing"));

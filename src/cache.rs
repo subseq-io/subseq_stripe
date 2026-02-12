@@ -1,6 +1,4 @@
-use std::{
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct CacheEntry<T> {
