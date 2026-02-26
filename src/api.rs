@@ -15,7 +15,7 @@ use url::Url;
 
 use crate::db;
 use crate::error::{ErrorKind, LibError};
-use crate::models::FinalizeCheckout;
+use crate::models::{BoxFut, FinalizeCheckout};
 use crate::stripe_events::HandlesStripeEvents;
 
 #[derive(Debug)]
@@ -47,7 +47,17 @@ pub trait HasPool {
     fn pool(&self) -> Arc<sqlx::PgPool>;
 }
 
-pub trait StripeApp: HasPool + ValidatesIdentity + HandlesStripeEvents {}
+/// Resolves the Stripe `internal_id` for an authenticated user.
+///
+/// Default: returns the user's UUID directly (user = billing entity).
+/// Override when the billing entity differs from the user (e.g. workspace/group).
+pub trait ResolvesPaymentId: HasPool {
+    fn resolve_payment_id(&self, user_id: uuid::Uuid) -> BoxFut<Result<uuid::Uuid, LibError>> {
+        Box::pin(async move { Ok(user_id) })
+    }
+}
+
+pub trait StripeApp: HasPool + ValidatesIdentity + HandlesStripeEvents + ResolvesPaymentId {}
 
 async fn get_product_handler<S>(
     State(app): State<S>,
@@ -95,7 +105,7 @@ async fn stripe_checkout_cart_handler<S>(
 where
     S: StripeApp + Clone + Send + Sync + 'static,
 {
-    let internal_id = auth_user.id().0;
+    let internal_id = app.resolve_payment_id(auth_user.id().0).await?;
     let SelectedPlan {
         key,
         quantity,
@@ -149,7 +159,8 @@ async fn stripe_get_subscription_handler<S>(
 where
     S: StripeApp + Clone + Send + Sync + 'static,
 {
-    let info = db::get_subscription(app.pool(), auth_user.id().0).await?;
+    let internal_id = app.resolve_payment_id(auth_user.id().0).await?;
+    let info = db::get_subscription(app.pool(), internal_id).await?;
     Ok(Json(info))
 }
 
@@ -167,8 +178,9 @@ async fn stripe_update_subscription_handler<S>(
 where
     S: StripeApp + Clone + Send + Sync + 'static,
 {
+    let internal_id = app.resolve_payment_id(auth_user.id().0).await?;
     let info =
-        db::update_subscription_price(app.pool(), auth_user.id().0, &body.key).await?;
+        db::update_subscription_price(app.pool(), internal_id, &body.key).await?;
     Ok(Json(info))
 }
 
@@ -179,7 +191,8 @@ async fn stripe_deactivate_subscription_handler<S>(
 where
     S: StripeApp + Clone + Send + Sync + 'static,
 {
-    db::deactivate_subscription(app.pool(), auth_user.id().0).await?;
+    let internal_id = app.resolve_payment_id(auth_user.id().0).await?;
+    db::deactivate_subscription(app.pool(), internal_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -6,7 +6,7 @@
 //!   to verify incoming webhook signatures.
 
 #[cfg(feature = "api")]
-pub use crate::api::{HasPool, StripeApp, routes};
+pub use crate::api::{HasPool, ResolvesPaymentId, StripeApp, routes};
 
 #[cfg(feature = "api")]
 pub use crate::stripe_events::HandlesStripeEvents;
