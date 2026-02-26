@@ -153,6 +153,25 @@ where
     Ok(Json(info))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSubscriptionBody {
+    pub key: String,
+}
+
+async fn stripe_update_subscription_handler<S>(
+    auth_user: AuthenticatedUser,
+    State(app): State<S>,
+    Json(body): Json<UpdateSubscriptionBody>,
+) -> Result<impl IntoResponse, AppError>
+where
+    S: StripeApp + Clone + Send + Sync + 'static,
+{
+    let info =
+        db::update_subscription_price(app.pool(), auth_user.id().0, &body.key).await?;
+    Ok(Json(info))
+}
+
 async fn stripe_deactivate_subscription_handler<S>(
     auth_user: AuthenticatedUser,
     State(app): State<S>,
@@ -172,7 +191,7 @@ where
     tracing::info!("Registering route /stripe/products [GET]");
     tracing::info!("Registering route /stripe/checkout/status [GET]");
     tracing::info!("Registering route /stripe/checkout [GET]");
-    tracing::info!("Registering route /stripe/subscription [GET,DELETE]");
+    tracing::info!("Registering route /stripe/subscription [GET,PATCH,DELETE]");
     let mut router = Router::new()
         .route(
             "/stripe/product/{product_id}",
@@ -187,6 +206,7 @@ where
         .route(
             "/stripe/subscription",
             get(stripe_get_subscription_handler::<S>)
+                .patch(stripe_update_subscription_handler::<S>)
                 .delete(stripe_deactivate_subscription_handler::<S>),
         );
 

@@ -686,6 +686,118 @@ where
     })
 }
 
+/// Switch an active subscription to a different price (upgrade/downgrade).
+///
+/// Stripe handles proration automatically — unused time on the old price is
+/// credited, and the difference is charged on the next invoice.
+pub async fn update_subscription_price<F, Fut, G, GFut>(
+    internal_id: Uuid,
+    new_price_id: &str,
+    get_subscription: F,
+    persist_update: G,
+) -> Result<SubscriptionInfo>
+where
+    F: FnOnce(Uuid) -> Fut,
+    Fut: Future<Output = Result<SubscriptionState>>,
+    G: FnOnce(Uuid, SubscriptionStateUpdate) -> GFut,
+    GFut: Future<Output = Result<()>>,
+{
+    let sub_state = get_subscription(internal_id).await?;
+    let sub_id_str = sub_state.subscription_id.ok_or_else(|| {
+        LibError::not_found(
+            "No active subscription",
+            anyhow!("update_subscription_price: no subscription for {internal_id}"),
+        )
+    })?;
+    if !sub_state.is_active {
+        return Err(LibError::invalid(
+            "Subscription is not active",
+            anyhow!("update_subscription_price: subscription inactive for {internal_id}"),
+        ));
+    }
+
+    let client = stripe_client_from_env()?;
+    let sub_id = SubscriptionId::from_str(&sub_id_str).map_err(|e| {
+        LibError::invalid(
+            "Invalid subscription ID",
+            anyhow!("update_subscription_price: bad sub id: {e}"),
+        )
+    })?;
+
+    // Fetch the current subscription to find the existing item ID
+    let current_sub = stripe::Subscription::retrieve(&client, &sub_id, &[])
+        .await
+        .map_err(|e| {
+            LibError::upstream(
+                "Failed to retrieve subscription",
+                anyhow!("update_subscription_price: retrieve failed: {e}"),
+            )
+        })?;
+
+    let item_id = current_sub
+        .items
+        .data
+        .first()
+        .map(|item| item.id.to_string())
+        .ok_or_else(|| {
+            LibError::upstream(
+                "Subscription has no items",
+                anyhow!("update_subscription_price: no items on sub {sub_id_str}"),
+            )
+        })?;
+
+    // Update the subscription: swap the price on the existing item
+    let mut params = stripe::UpdateSubscription::new();
+    params.items = Some(vec![stripe::UpdateSubscriptionItems {
+        id: Some(item_id),
+        price: Some(new_price_id.to_string()),
+        ..Default::default()
+    }]);
+    // proration_behavior defaults to create_prorations when omitted
+
+    let updated_sub = stripe::Subscription::update(&client, &sub_id, params)
+        .await
+        .map_err(|e| {
+            LibError::upstream(
+                "Failed to update subscription",
+                anyhow!("update_subscription_price: stripe update failed: {e}"),
+            )
+        })?;
+
+    // Persist the new state locally
+    let seats = seats_from_subscription_first_licensed(&updated_sub);
+    let update = SubscriptionStateUpdate {
+        subscription_id: Some(updated_sub.id.to_string()),
+        price_id: price_id_from_subscription(&updated_sub),
+        subscription_type: SubscriptionType::Paid,
+        cancel_at_period_end: updated_sub.cancel_at_period_end,
+        current_period_start: Some(
+            unix_seconds_to_systemtime(updated_sub.current_period_start).naive_utc(),
+        ),
+        current_period_end: Some(
+            unix_seconds_to_systemtime(updated_sub.current_period_end).naive_utc(),
+        ),
+        is_auto_billing: !updated_sub.cancel_at_period_end,
+        seats,
+    };
+
+    persist_update(internal_id, update).await?;
+
+    Ok(SubscriptionInfo {
+        plan: SubscriptionType::Paid,
+        price_id: price_id_from_subscription(&updated_sub),
+        seats: seats.map(|s| s as i32),
+        is_active: updated_sub.status == stripe::SubscriptionStatus::Active,
+        current_period_start: Some(
+            unix_seconds_to_systemtime(updated_sub.current_period_start),
+        ),
+        current_period_end: Some(
+            unix_seconds_to_systemtime(updated_sub.current_period_end),
+        ),
+        auto_renew: !updated_sub.cancel_at_period_end,
+    })
+}
+
 pub async fn deactivate_subscription<F, Fut, G, GFut>(
     internal_id: Uuid,
     get_subscription: F,

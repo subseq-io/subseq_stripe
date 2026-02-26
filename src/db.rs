@@ -871,6 +871,66 @@ pub async fn get_subscription(pool: Arc<PgPool>, internal_id: Uuid) -> Result<Su
     sub_row_to_state(row)
 }
 
+pub async fn update_subscription_price(
+    pool: Arc<PgPool>,
+    internal_id: Uuid,
+    new_price_key: &str,
+) -> Result<models::SubscriptionInfo> {
+    // Resolve the price key to a Stripe price_id
+    let price_row = PriceRow::get(&pool, new_price_key)
+        .await
+        .map_err(|e| {
+            LibError::database(
+                "Failed to look up price",
+                anyhow!("update_subscription_price: price lookup failed: {e}"),
+            )
+        })?
+        .ok_or_else(|| {
+            LibError::not_found(
+                "Price not found",
+                anyhow!("update_subscription_price: no price for key {new_price_key}"),
+            )
+        })?;
+
+    let get_subscription = async |id: Uuid| -> Result<SubscriptionState> {
+        let row = SubscriptionRow::get_by_internal_id(&pool, id)
+            .await
+            .map_err(|e| {
+                LibError::database(
+                    "Failed to get subscription",
+                    anyhow!("update_subscription_price: get sub failed: {e}"),
+                )
+            })?
+            .ok_or_else(|| {
+                LibError::not_found(
+                    "Subscription not found",
+                    anyhow!("update_subscription_price: no sub for {id}"),
+                )
+            })?;
+        sub_row_to_state(row)
+    };
+
+    let persist_update =
+        async |id: Uuid, update: SubscriptionStateUpdate| -> Result<()> {
+            SubscriptionRow::update_by_internal_id(&pool, id, update)
+                .await
+                .map_err(|e| {
+                    LibError::database(
+                        "Failed to update subscription",
+                        anyhow!("update_subscription_price: persist failed: {e}"),
+                    )
+                })
+        };
+
+    models::update_subscription_price(
+        internal_id,
+        &price_row.price_id,
+        get_subscription,
+        persist_update,
+    )
+    .await
+}
+
 pub async fn deactivate_subscription(pool: Arc<PgPool>, internal_id: Uuid) -> Result<()> {
     let get_subscription = async |internal_id: Uuid| -> Result<SubscriptionState> {
         let row = SubscriptionRow::get_by_internal_id(&pool, internal_id)
